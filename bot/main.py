@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
 from aiogram.types import (
     ChatPermissions,
     ReplyKeyboardMarkup,
@@ -48,11 +48,15 @@ async def start_handler(message: types.Message, state: FSMContext):
     if message.chat.type != "private":
         return
 
+    keyboard = [
+        [KeyboardButton(text="Ro'yxatdan o'tish")],
+        [KeyboardButton(text="👨‍💻 Dasturchi")],
+    ]
+    if message.from_user.id in admins:
+        keyboard.append([KeyboardButton(text="🛠 Admin panel")])
+
     kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Ro'yxatdan o'tish")],
-            [KeyboardButton(text="👨‍💻 Dasturchi")],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True
     )
 
@@ -198,9 +202,42 @@ async def check_group_messages(message: types.Message):
                 logging.error(f"Ogohlantirish xabarida xato: {e}")
 
 
+# ✅ Bot guruhga qo'shilganda
+@dp.my_chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
+async def bot_joined(update: types.ChatMemberUpdated):
+    if update.new_chat_member.user.id == (await bot.get_me()).id:
+        joined_groups.add(update.chat.id)
+
+
+# ✅ Bot guruhdan chiqarilganda
+@dp.my_chat_member(ChatMemberUpdatedFilter(IS_MEMBER >> IS_NOT_MEMBER))
+async def bot_left(update: types.ChatMemberUpdated):
+    if update.new_chat_member.user.id == (await bot.get_me()).id:
+        joined_groups.discard(update.chat.id)
+
+
 # ✅ Admin panel faqat /admin komandasi orqali
 @dp.message(Command("admin"))
 async def admin_panel(message: types.Message):
+    if message.chat.type != "private":
+        return
+    if message.from_user.id not in admins:
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Statistika", callback_data="stats")],
+        [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="broadcast")],
+        [InlineKeyboardButton(text="👥 Guruhlar", callback_data="groups")],
+        [InlineKeyboardButton(text="➕ Admin qo‘shish", callback_data="add_admin")],
+    ])
+    await message.answer("🛠 Admin panel", reply_markup=kb)
+
+
+# ✅ Admin panel tugmasi orqali
+@dp.message(F.text == "🛠 Admin panel")
+async def admin_panel_text(message: types.Message):
+    if message.chat.type != "private":
+        return
     if message.from_user.id not in admins:
         return
 
@@ -218,6 +255,7 @@ async def admin_panel(message: types.Message):
 async def stats(call: types.CallbackQuery):
     if call.from_user.id not in admins:
         return
+    await call.answer()
     await call.message.answer(f"📊 Foydalanuvchilar soni: {len(registered_users)}")
 
 
@@ -226,11 +264,17 @@ async def stats(call: types.CallbackQuery):
 async def groups(call: types.CallbackQuery):
     if call.from_user.id not in admins:
         return
+    await call.answer()
     if not joined_groups:
         return await call.message.answer("❌ Hozircha guruhga qo‘shilmaganman.")
     txt = "👥 Bot qo‘shilgan guruhlar:\n\n"
-    for g in joined_groups:
-        txt += f"• <code>{g}</code>\n"
+    for g in list(joined_groups):
+        try:
+            chat = await bot.get_chat(g)
+            txt += f"• {chat.title} (<code>{g}</code>)\n"
+        except Exception as e:
+            logging.error(f"Guruh ma'lumotini olishda xato: {e}")
+            joined_groups.discard(g)
     await call.message.answer(txt)
 
 
@@ -242,6 +286,7 @@ class BroadcastState(StatesGroup):
 async def broadcast_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id not in admins:
         return
+    await call.answer()
     await call.message.answer("✍️ Yuboriladigan xabarni kiriting:")
     await state.set_state(BroadcastState.text)
 
@@ -252,7 +297,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         return
     text = message.text
     count = 0
-    for user_id in registered_users:
+    for user_id in list(registered_users):
         try:
             await bot.send_message(user_id, text)
             count += 1
@@ -270,6 +315,7 @@ class AddAdminState(StatesGroup):
 async def add_admin_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id not in admins:
         return
+    await call.answer()
     await call.message.answer("➕ Yangi adminning Telegram ID raqamini yuboring:")
     await state.set_state(AddAdminState.user_id)
 
@@ -290,7 +336,7 @@ async def add_admin_process(message: types.Message, state: FSMContext):
 # 🔹 Botni ishga tushirish
 async def main():
     print("🤖 Bot ishga tushdi...")
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":
