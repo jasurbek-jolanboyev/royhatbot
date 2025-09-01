@@ -19,6 +19,7 @@ from aiogram.client.default import DefaultBotProperties
 BOT_TOKEN = "6335576043:AAG9s9vmorxeHakm-uZ5-Jb3SRZGqRX2e7I"
 DATABASE_CHANNEL = -1003085828839
 admins = {6060353145}   # bosh admin ID
+owners = {6060353145}   # egalar IDlari
 
 # =========================
 # 🔔 Logging
@@ -234,7 +235,7 @@ async def process_about(message: types.Message, state: FSMContext):
         del pending_unlock[message.from_user.id]
 
 # =========================
-# 📊 Admin panel (Statistika / Guruhlar / Broadcast / DM / Admin qo‘shish/olib tashlash)
+# 📊 Admin panel
 # =========================
 @dp.message(F.text == "📊 Statistika")
 async def admin_stats(message: types.Message):
@@ -350,7 +351,11 @@ async def remove_admin_process(message: types.Message, state: FSMContext):
         return await cancel_handler(message, state)
     try:
         remove_admin = int(message.text.strip())
-        if remove_admin in admins:
+
+        # 🚫 Asosiy adminni olib tashlash mumkin emas
+        if remove_admin in owners:
+            await message.answer("❌ Asosiy adminni olib tashlash mumkin emas.", reply_markup=main_menu(message.from_user.id))
+        elif remove_admin in admins:
             admins.remove(remove_admin)
             await message.answer(f"✅ <code>{remove_admin}</code> adminlikdan olib tashlandi.", reply_markup=main_menu(message.from_user.id))
         else:
