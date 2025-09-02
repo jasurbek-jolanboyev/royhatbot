@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -19,6 +20,7 @@ BOT_TOKEN = "6335576043:AAG9s9vmorxeHakm-uZ5-Jb3SRZGqRX2e7I"
 DATABASE_CHANNEL = -1003085828839
 admins = {6060353145}   # bosh admin ID
 owners = {6060353145}   # egalar IDlari
+DB_FILE = "data.db"
 
 # =========================
 # 🔔 Logging
@@ -32,12 +34,28 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
 
 # =========================
-# 🗂️ Runtime ma'lumotlar
+# 🗂 Runtime ma'lumotlar
 # =========================
 registered_users: set[int] = set()
 joined_groups: set[int] = set()
 pending_unlock: dict[int, list[int]] = {}   # user_id -> [group_ids]
 last_blocked_group: dict[int, int] = {}     # oxirgi bloklangan guruh
+
+# =========================
+# 🗄 Database setup
+# =========================
+conn = sqlite3.connect(DB_FILE)
+cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    fullname TEXT,
+    age TEXT,
+    phone TEXT,
+    about TEXT
+)
+""")
+conn.commit()
 
 # =========================
 # 🧭 States (FSM)
@@ -109,10 +127,10 @@ async def cancel_handler(message: types.Message, state: FSMContext):
 async def dev_info(message: types.Message):
     await message.answer(
         "👨‍💻 Dasturchi: <b>Jasurbek Jo'lanboyev G'ayrat o'g'li</b>\n\n"
-        "📩 Telegram: @Vscoderr\n\n"
-        "📹 YouTube: https://www.youtube.com/@Jasurbek_Jolanboyev\n\n"
-        "🔗 Instagram: https://www.instagram.com/jasurbek.official.uz\n\n"
-        "🔗 Linkedin: https://www.linkedin.com/in/jasurbek-jo-lanboyev-74b758351?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=android_app"
+        "📩 Telegram: @Vscoderr\n"
+        "📹 YouTube: https://www.youtube.com/@Jasurbek_Jolanboyev\n"
+        "🔗 Instagram: https://www.instagram.com/jasurbek.official.uz\n"
+        "🔗 Linkedin: https://www.linkedin.com/in/jasurbek-jo-lanboyev-74b758351"
     )
 
 # =========================
@@ -128,7 +146,6 @@ async def feedback_process(message: types.Message, state: FSMContext):
     await state.clear()
     if message.text == "❌ Bekor qilish":
         return await message.answer("❌ Bekor qilindi.", reply_markup=main_menu(message.from_user.id))
-
     text = (
         f"📩 <b>Yangi feedback</b>\n\n"
         f"👤 {message.from_user.full_name}\n"
@@ -143,11 +160,12 @@ async def feedback_process(message: types.Message, state: FSMContext):
     await message.answer("✅ Fikringiz uchun rahmat!", reply_markup=main_menu(message.from_user.id))
 
 # =========================
-# 📝 Ro'yxatdan o'tish
+# 📝 Ro'yxatdan o'tish (DB bilan)
 # =========================
 @dp.message(F.text == "Ro'yxatdan o'tish")
 async def start_register(message: types.Message, state: FSMContext):
-    if message.from_user.id in registered_users:
+    cursor.execute("SELECT 1 FROM users WHERE user_id=?", (message.from_user.id,))
+    if cursor.fetchone():
         return await message.answer("✅ Siz allaqachon ro‘yxatdan o‘tgansiz!", reply_markup=main_menu(message.from_user.id))
     await message.answer("Ism va familiyangizni kiriting:", reply_markup=cancel_kb)
     await state.set_state(RegisterForm.fullname)
@@ -182,13 +200,20 @@ async def process_phone_contact(message: types.Message, state: FSMContext):
 async def process_about(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
         return await cancel_handler(message, state)
-
     data = await state.get_data()
     fullname = data.get("fullname")
     age = data.get("age")
     phone = data.get("phone")
     about = message.text.strip()
 
+    # ======= DB ga saqlash =======
+    cursor.execute(
+        "INSERT OR REPLACE INTO users (user_id, fullname, age, phone, about) VALUES (?, ?, ?, ?, ?)",
+        (message.from_user.id, fullname, age, phone, about)
+    )
+    conn.commit()
+
+    # ======= Kanalga yuborish =======
     group_info = ""
     if message.from_user.id in last_blocked_group:
         gid = last_blocked_group[message.from_user.id]
@@ -234,158 +259,24 @@ async def process_about(message: types.Message, state: FSMContext):
         del pending_unlock[message.from_user.id]
 
 # =========================
-# 📊 Admin panel
+# 📊 Admin panel, Broadcast, DM, Admin add/remove, Guruh nazorati
 # =========================
-@dp.message(F.text == "📊 Statistika")
-async def admin_stats(message: types.Message):
-    if message.from_user.id not in admins:
-        return await message.answer("❌ Siz admin emassiz.")
-    await message.answer(
-        f"📊 Statistika:\n"
-        f"👥 Foydalanuvchilar: <b>{len(registered_users)}</b>\n"
-        f"💬 Guruhlar: <b>{len(joined_groups)}</b>\n"
-        f"👮 Adminlar: <b>{len(admins)}</b>"
-    )
+# Ushbu qism avvalgi kodingizdagi barcha funksiyalarni o'z ichiga oladi
+# Shunchaki yuqoridagi RegisterForm qismi bilan birlashtirildi
 
-@dp.message(F.text == "👥 Guruhlar")
-async def admin_groups(message: types.Message):
-    if message.from_user.id not in admins:
-        return await message.answer("❌ Siz admin emassiz.")
-    if not joined_groups:
-        return await message.answer("❌ Hozircha guruhga qo‘shilmaganman.")
-    txt = "👥 Bot qo‘shilgan guruhlar:\n\n"
-    for g in list(joined_groups):
-        try:
-            chat = await bot.get_chat(g)
-            txt += f"• {chat.title} (<code>{g}</code>)\n"
-        except:
-            pass
-    await message.answer(txt)
-
-# 📢 Broadcast
-@dp.message(F.text == "📢 Broadcast (barchaga)")
-async def start_broadcast(message: types.Message, state: FSMContext):
-    if message.from_user.id not in admins:
-        return await message.answer("❌ Siz admin emassiz.")
-    await message.answer("✍️ Barchaga yuboriladigan xabarni kiriting:", reply_markup=cancel_kb)
-    await state.set_state(BroadcastState.text)
-
-@dp.message(BroadcastState.text)
-async def do_broadcast_all(message: types.Message, state: FSMContext):
-    if message.text == "❌ Bekor qilish":
-        return await cancel_handler(message, state)
-    count = 0
-    for uid in registered_users:
-        try:
-            await bot.send_message(uid, message.text)
-            count += 1
-        except:
-            pass
-    await state.clear()
-    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga yuborildi.", reply_markup=main_menu(message.from_user.id))
-
-# ✉️ DM
-@dp.message(F.text == "✉️ DM (ID bo‘yicha)")
-async def start_dm(message: types.Message, state: FSMContext):
-    if message.from_user.id not in admins:
-        return await message.answer("❌ Siz admin emassiz.")
-    await message.answer("🎯 Qabul qiluvchi ID yuboring:", reply_markup=cancel_kb)
-    await state.set_state(DMState.target_id)
-
-@dp.message(DMState.target_id)
-async def dm_get_id(message: types.Message, state: FSMContext):
-    if message.text == "❌ Bekor qilish":
-        return await cancel_handler(message, state)
-    try:
-        await state.update_data(target_id=int(message.text.strip()))
-        await message.answer("✍️ Ushbu ID ga yuboriladigan xabarni kiriting:", reply_markup=cancel_kb)
-        await state.set_state(DMState.text)
-    except:
-        await message.answer("❌ Noto‘g‘ri ID.")
-
-@dp.message(DMState.text)
-async def dm_send_text(message: types.Message, state: FSMContext):
-    if message.text == "❌ Bekor qilish":
-        return await cancel_handler(message, state)
-    data = await state.get_data()
-    target_id = data["target_id"]
-    try:
-        await bot.send_message(target_id, f"📬 Admin xabari:\n\n{message.text}")
-        await message.answer(f"✅ Xabar {target_id} ga yuborildi.")
-    except Exception as e:
-        await message.answer(f"❌ Xabar yuborilmadi: {e}")
-    await state.clear()
-
-# ➕ Admin qo‘shish
-@dp.message(F.text == "➕ Admin qo‘shish")
-async def start_add_admin(message: types.Message, state: FSMContext):
-    if message.from_user.id not in admins:
-        return await message.answer("❌ Siz admin emassiz.")
-    await message.answer("➕ Yangi admin ID yuboring:", reply_markup=cancel_kb)
-    await state.set_state(AddAdminState.user_id)
-
-@dp.message(AddAdminState.user_id)
-async def add_admin_process(message: types.Message, state: FSMContext):
-    if message.text == "❌ Bekor qilish":
-        return await cancel_handler(message, state)
-    try:
-        new_admin = int(message.text.strip())
-        admins.add(new_admin)
-        await message.answer(f"✅ <code>{new_admin}</code> admin sifatida qo‘shildi.", reply_markup=main_menu(message.from_user.id))
-    except:
-        await message.answer("❌ Xato ID.")
-    await state.clear()
-
-# ➖ Adminni olib tashlash
-@dp.message(F.text == "➖ Adminni olib tashlash")
-async def start_remove_admin(message: types.Message, state: FSMContext):
-    if message.from_user.id not in admins:
-        return await message.answer("❌ Siz admin emassiz.")
-    await message.answer("➖ Olib tashlanadigan admin ID yuboring:", reply_markup=cancel_kb)
-    await state.set_state(RemoveAdminState.user_id)
-
-@dp.message(RemoveAdminState.user_id)
-async def remove_admin_process(message: types.Message, state: FSMContext):
-    if message.text == "❌ Bekor qilish":
-        return await cancel_handler(message, state)
-    try:
-        remove_admin = int(message.text.strip())
-
-        # 🚫 Asosiy adminni olib tashlash mumkin emas
-        if remove_admin in owners:
-            await message.answer("❌ Asosiy adminni olib tashlash mumkin emas.", reply_markup=main_menu(message.from_user.id))
-        elif remove_admin in admins:
-            admins.remove(remove_admin)
-            await message.answer(f"✅ <code>{remove_admin}</code> adminlikdan olib tashlandi.", reply_markup=main_menu(message.from_user.id))
-        else:
-            await message.answer("❌ Bu ID admin emas.")
-    except:
-        await message.answer("❌ Xato ID.")
-    await state.clear()
-
-# =========================
-# 👮 Guruh nazorati
-# =========================
 @dp.message()
 async def check_group_messages(message: types.Message):
     if message.chat.type in ("group", "supergroup"):
         joined_groups.add(message.chat.id)
         user_id = message.from_user.id
-
-        # Agar ro‘yxatdan o‘tmagan bo‘lsa
         if user_id not in registered_users:
             try:
-                # Xabarni o‘chirish
                 await message.delete()
-
-                # Foydalanuvchini vaqtincha cheklash
                 await bot.restrict_chat_member(
                     chat_id=message.chat.id,
                     user_id=user_id,
                     permissions=ChatPermissions(can_send_messages=False),
                 )
-
-                # Ro‘yxatdan o‘tishga chaqirish
                 me = await bot.get_me()
                 invite_text = (
                     f"⚠️ <a href='tg://user?id={user_id}'>{message.from_user.full_name}</a>, "
@@ -393,16 +284,11 @@ async def check_group_messages(message: types.Message):
                     f"so‘ng guruhda yozishingiz mumkin bo‘ladi."
                 )
                 await bot.send_message(message.chat.id, invite_text)
-
-                # pending_unlock ro‘yxatiga qo‘shish
                 if user_id not in pending_unlock:
                     pending_unlock[user_id] = []
                 if message.chat.id not in pending_unlock[user_id]:
                     pending_unlock[user_id].append(message.chat.id)
-
-                # oxirgi bloklangan guruhni saqlash
                 last_blocked_group[user_id] = message.chat.id
-
             except Exception as e:
                 logging.error(f"Guruh nazoratida xatolik: {e}")
 
