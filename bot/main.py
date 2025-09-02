@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sqlite3
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -34,28 +35,12 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
 
 # =========================
-# 🗂 Runtime ma'lumotlar
+# 🗂️ Runtime ma'lumotlar
 # =========================
 registered_users: set[int] = set()
 joined_groups: set[int] = set()
 pending_unlock: dict[int, list[int]] = {}   # user_id -> [group_ids]
 last_blocked_group: dict[int, int] = {}     # oxirgi bloklangan guruh
-
-# =========================
-# 🗄 Database setup
-# =========================
-conn = sqlite3.connect(DB_FILE)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    fullname TEXT,
-    age TEXT,
-    phone TEXT,
-    about TEXT
-)
-""")
-conn.commit()
 
 # =========================
 # 🧭 States (FSM)
@@ -105,6 +90,44 @@ def main_menu(user_id: int):
 cancel_kb = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[[KeyboardButton(text="❌ Bekor qilish")]])
 
 # =========================
+# 🗃️ SQLite bazasi
+# =========================
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        fullname TEXT,
+        age TEXT,
+        phone TEXT,
+        about TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+def add_user_to_db(user_id: int, fullname: str, age: str, phone: str, about: str):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT OR REPLACE INTO users (user_id, fullname, age, phone, about)
+    VALUES (?, ?, ?, ?, ?)
+    """, (user_id, fullname, age, phone, about))
+    conn.commit()
+    conn.close()
+
+def load_registered_users():
+    global registered_users
+    if os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        rows = cursor.fetchall()
+        registered_users = {row[0] for row in rows}
+        conn.close()
+
+# =========================
 # 🚀 /start
 # =========================
 @dp.message(Command("start"))
@@ -146,6 +169,7 @@ async def feedback_process(message: types.Message, state: FSMContext):
     await state.clear()
     if message.text == "❌ Bekor qilish":
         return await message.answer("❌ Bekor qilindi.", reply_markup=main_menu(message.from_user.id))
+
     text = (
         f"📩 <b>Yangi feedback</b>\n\n"
         f"👤 {message.from_user.full_name}\n"
@@ -160,12 +184,11 @@ async def feedback_process(message: types.Message, state: FSMContext):
     await message.answer("✅ Fikringiz uchun rahmat!", reply_markup=main_menu(message.from_user.id))
 
 # =========================
-# 📝 Ro'yxatdan o'tish (DB bilan)
+# 📝 Ro'yxatdan o'tish
 # =========================
 @dp.message(F.text == "Ro'yxatdan o'tish")
 async def start_register(message: types.Message, state: FSMContext):
-    cursor.execute("SELECT 1 FROM users WHERE user_id=?", (message.from_user.id,))
-    if cursor.fetchone():
+    if message.from_user.id in registered_users:
         return await message.answer("✅ Siz allaqachon ro‘yxatdan o‘tgansiz!", reply_markup=main_menu(message.from_user.id))
     await message.answer("Ism va familiyangizni kiriting:", reply_markup=cancel_kb)
     await state.set_state(RegisterForm.fullname)
@@ -195,51 +218,42 @@ async def process_phone_contact(message: types.Message, state: FSMContext):
     await state.update_data(phone=message.contact.phone_number)
     await message.answer("O‘zingiz haqingizda qisqacha yozing:", reply_markup=cancel_kb)
     await state.set_state(RegisterForm.about)
-
 @dp.message(RegisterForm.about)
 async def process_about(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
         return await cancel_handler(message, state)
+
     data = await state.get_data()
     fullname = data.get("fullname")
     age = data.get("age")
     phone = data.get("phone")
     about = message.text.strip()
 
-    # ======= DB ga saqlash =======
-    cursor.execute(
-        "INSERT OR REPLACE INTO users (user_id, fullname, age, phone, about) VALUES (?, ?, ?, ?, ?)",
-        (message.from_user.id, fullname, age, phone, about)
-    )
-    conn.commit()
+    # 1️⃣ SQLite bazaga yozish
+    add_user_to_db(message.from_user.id, fullname, age, phone, about)
+    registered_users.add(message.from_user.id)
 
-    # ======= Kanalga yuborish =======
-    group_info = ""
-    if message.from_user.id in last_blocked_group:
-        gid = last_blocked_group[message.from_user.id]
-        try:
-            chat = await bot.get_chat(gid)
-            link = chat.invite_link or f"https://t.me/c/{str(gid)[4:]}"
-            group_info = f"\n🏷 Guruh: {chat.title}\n🔗 Link: {link}"
-        except:
-            pass
+    # 2️⃣ Text faylga yozish
+    with open("data.txt", "a", encoding="utf-8") as f:
+        f.write(f"{message.from_user.id} | {fullname} | {age} | {phone} | {about}\n")
 
+    # 3️⃣ Telegram kanalga yuborish
     text = (
-        f"📝 <b>Yangi foydalanuvchi</b>\n\n"
-        f"👤 Ism Familiya: {fullname}\n"
-        f"📅 Yosh: {age}\n"
-        f"📱 Telefon: {phone}\n"
-        f"ℹ️ Qo‘shimcha: {about}\n"
-        f"🆔 ID: <code>{message.from_user.id}</code>{group_info}"
+        f"📌 <b>Yangi foydalanuvchi ro‘yxatdan o‘tdi</b>\n\n"
+        f"👤 Ismi: {fullname}\n"
+        f"🆔 ID: <code>{message.from_user.id}</code>\n"
+        f"🎂 Yoshi: {age}\n"
+        f"📞 Telefon: {phone}\n"
+        f"📝 Haqida: {about}"
     )
     try:
         await bot.send_message(DATABASE_CHANNEL, text)
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"Kanalga yuborishda xatolik: {e}")
 
-    registered_users.add(message.from_user.id)
     await state.clear()
     await message.answer("✅ Siz muvaffaqiyatli ro‘yxatdan o‘tdingiz!", reply_markup=main_menu(message.from_user.id))
+
 
     # 🔓 Guruh cheklovini olib tashlash
     if message.from_user.id in pending_unlock:
@@ -259,16 +273,14 @@ async def process_about(message: types.Message, state: FSMContext):
         del pending_unlock[message.from_user.id]
 
 # =========================
-# 📊 Admin panel, Broadcast, DM, Admin add/remove, Guruh nazorati
+# 👮 Guruh nazorati
 # =========================
-# Ushbu qism avvalgi kodingizdagi barcha funksiyalarni o'z ichiga oladi
-# Shunchaki yuqoridagi RegisterForm qismi bilan birlashtirildi
-
 @dp.message()
 async def check_group_messages(message: types.Message):
     if message.chat.type in ("group", "supergroup"):
         joined_groups.add(message.chat.id)
         user_id = message.from_user.id
+
         if user_id not in registered_users:
             try:
                 await message.delete()
@@ -293,9 +305,33 @@ async def check_group_messages(message: types.Message):
                 logging.error(f"Guruh nazoratida xatolik: {e}")
 
 # =========================
+# 🔔 Reminder – guruhda ro‘yxatsizlarni eslatish
+# =========================
+async def reminder_task():
+    while True:
+        try:
+            for gid in joined_groups:
+                for user_id in pending_unlock:
+                    if gid in pending_unlock[user_id]:
+                        try:
+                            await bot.send_message(
+                                gid,
+                                f"⚠️ <a href='tg://user?id={user_id}'>Foydalanuvchi</a>, iltimos botda ro‘yxatdan o‘ting."
+                            )
+                        except:
+                            pass
+            await asyncio.sleep(3600)  # har 1 soatda eslatadi
+        except Exception as e:
+            logging.error(f"Reminder xatolik: {e}")
+            await asyncio.sleep(60)
+
+# =========================
 # 🔄 Run
 # =========================
 async def main():
+    init_db()
+    load_registered_users()
+    asyncio.create_task(reminder_task())
     print("🤖 Bot ishga tushdi...")
     await dp.start_polling(bot)
 
