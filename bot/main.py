@@ -225,15 +225,12 @@ async def process_about(message: types.Message, state: FSMContext):
     phone = data.get("phone")
     about = message.text.strip()
 
-    # SQLite bazaga yozish
     add_user_to_db(message.from_user.id, fullname, age, phone, about)
     registered_users.add(message.from_user.id)
 
-    # Text faylga yozish
     with open("data.txt", "a", encoding="utf-8") as f:
         f.write(f"{message.from_user.id} | {fullname} | {age} | {phone} | {about}\n")
 
-    # Telegram kanalga yuborish
     text = (
         f"📌 <b>Yangi foydalanuvchi ro‘yxatdan o‘tdi</b>\n\n"
         f"👤 Ismi: {fullname}\n"
@@ -247,7 +244,6 @@ async def process_about(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"Kanalga yuborishda xatolik: {e}")
 
-    # Guruh cheklovini olib tashlash
     if message.from_user.id in pending_unlock:
         for gid in pending_unlock[message.from_user.id]:
             try:
@@ -297,6 +293,93 @@ async def check_group_messages(message: types.Message):
                 last_blocked_group[user_id] = message.chat.id
             except Exception as e:
                 logging.error(f"Guruh nazoratida xatolik: {e}")
+
+# =========================
+# 🔔 Admin tugmalari
+# =========================
+@dp.message(F.text == "📊 Statistika")
+async def admin_statistics(message: types.Message):
+    if message.from_user.id not in admins:
+        return
+    await message.answer(f"📊 Ro‘yxatdan o‘tgan foydalanuvchilar soni: {len(registered_users)}")
+
+@dp.message(F.text == "👥 Guruhlar")
+async def admin_groups(message: types.Message):
+    if message.from_user.id not in admins:
+        return
+    await message.answer(f"👥 Bot qo‘shilgan guruhlar:\n{', '.join(map(str, joined_groups))}")
+
+@dp.message(F.text == "📢 Broadcast (barchaga)")
+async def broadcast_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in admins:
+        return
+    await message.answer("✍️ Broadcast matnini kiriting:", reply_markup=cancel_kb)
+    await state.set_state(BroadcastState.text)
+
+@dp.message(BroadcastState.text)
+async def broadcast_send(message: types.Message, state: FSMContext):
+    await state.clear()
+    for user_id in registered_users:
+        try:
+            await bot.send_message(user_id, message.text)
+        except:
+            pass
+    await message.answer("✅ Broadcast jo‘natildi!", reply_markup=main_menu(message.from_user.id))
+
+@dp.message(F.text == "✉️ DM (ID bo‘yicha)")
+async def dm_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in admins:
+        return
+    await message.answer("📩 Foydalanuvchi ID sini kiriting:", reply_markup=cancel_kb)
+    await state.set_state(DMState.target_id)
+
+@dp.message(DMState.target_id)
+async def dm_get_target(message: types.Message, state: FSMContext):
+    await state.update_data(target_id=message.text.strip())
+    await message.answer("✍️ Xabar matnini kiriting:", reply_markup=cancel_kb)
+    await state.set_state(DMState.text)
+
+@dp.message(DMState.text)
+async def dm_send(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = int(data.get("target_id"))
+    try:
+        await bot.send_message(target_id, message.text)
+        await message.answer("✅ Xabar jo‘natildi!", reply_markup=main_menu(message.from_user.id))
+    except:
+        await message.answer("❌ Xabar jo‘natilmadi.", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+
+@dp.message(F.text == "➕ Admin qo‘shish")
+async def add_admin_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in owners:
+        return
+    await message.answer("➕ Qo‘shiladigan admin ID sini kiriting:", reply_markup=cancel_kb)
+    await state.set_state(AddAdminState.user_id)
+
+@dp.message(AddAdminState.user_id)
+async def add_admin_confirm(message: types.Message, state: FSMContext):
+    user_id = int(message.text.strip())
+    admins.add(user_id)
+    await message.answer(f"✅ {user_id} admin qilindi.", reply_markup=main_menu(message.from_user.id))
+    await state.clear()
+
+@dp.message(F.text == "➖ Adminni olib tashlash")
+async def remove_admin_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in owners:
+        return
+    await message.answer("➖ Olib tashlanadigan admin ID sini kiriting:", reply_markup=cancel_kb)
+    await state.set_state(RemoveAdminState.user_id)
+
+user_id = int(message.text.strip())
+if user_id in owners:
+    await message.answer("❌ Ownerni olib tashlab bo‘lmaydi!", reply_markup=main_menu(message.from_user.id))
+elif user_id in admins:
+    admins.remove(user_id)
+    await message.answer(f"✅ {user_id} adminlikdan olib tashlandi.", reply_markup=main_menu(message.from_user.id))
+else:
+    await message.answer("❌ Bu ID admin emas.", reply_markup=main_menu(message.from_user.id))
+
 
 # =========================
 # 🔔 Reminder – guruhda ro‘yxatsizlarni eslatish
