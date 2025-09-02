@@ -4,11 +4,7 @@ import sqlite3
 import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import (
-    ChatPermissions,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-)
+from aiogram.types import ChatPermissions, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -39,8 +35,8 @@ dp = Dispatcher(storage=MemoryStorage())
 # =========================
 registered_users: set[int] = set()
 joined_groups: set[int] = set()
-pending_unlock: dict[int, list[int]] = {}   # user_id -> [group_ids]
-last_blocked_group: dict[int, int] = {}     # oxirgi bloklangan guruh
+pending_unlock: dict[int, list[int]] = {}
+last_blocked_group: dict[int, int] = {}
 
 # =========================
 # 🧭 States (FSM)
@@ -218,26 +214,26 @@ async def process_phone_contact(message: types.Message, state: FSMContext):
     await state.update_data(phone=message.contact.phone_number)
     await message.answer("O‘zingiz haqingizda qisqacha yozing:", reply_markup=cancel_kb)
     await state.set_state(RegisterForm.about)
+
 @dp.message(RegisterForm.about)
 async def process_about(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
         return await cancel_handler(message, state)
-
     data = await state.get_data()
     fullname = data.get("fullname")
     age = data.get("age")
     phone = data.get("phone")
     about = message.text.strip()
 
-    # 1️⃣ SQLite bazaga yozish
+    # SQLite bazaga yozish
     add_user_to_db(message.from_user.id, fullname, age, phone, about)
     registered_users.add(message.from_user.id)
 
-    # 2️⃣ Text faylga yozish
+    # Text faylga yozish
     with open("data.txt", "a", encoding="utf-8") as f:
         f.write(f"{message.from_user.id} | {fullname} | {age} | {phone} | {about}\n")
 
-    # 3️⃣ Telegram kanalga yuborish
+    # Telegram kanalga yuborish
     text = (
         f"📌 <b>Yangi foydalanuvchi ro‘yxatdan o‘tdi</b>\n\n"
         f"👤 Ismi: {fullname}\n"
@@ -251,11 +247,7 @@ async def process_about(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"Kanalga yuborishda xatolik: {e}")
 
-    await state.clear()
-    await message.answer("✅ Siz muvaffaqiyatli ro‘yxatdan o‘tdingiz!", reply_markup=main_menu(message.from_user.id))
-
-
-    # 🔓 Guruh cheklovini olib tashlash
+    # Guruh cheklovini olib tashlash
     if message.from_user.id in pending_unlock:
         for gid in pending_unlock[message.from_user.id]:
             try:
@@ -272,6 +264,9 @@ async def process_about(message: types.Message, state: FSMContext):
                 pass
         del pending_unlock[message.from_user.id]
 
+    await state.clear()
+    await message.answer("✅ Siz muvaffaqiyatli ro‘yxatdan o‘tdingiz!", reply_markup=main_menu(message.from_user.id))
+
 # =========================
 # 👮 Guruh nazorati
 # =========================
@@ -280,7 +275,6 @@ async def check_group_messages(message: types.Message):
     if message.chat.type in ("group", "supergroup"):
         joined_groups.add(message.chat.id)
         user_id = message.from_user.id
-
         if user_id not in registered_users:
             try:
                 await message.delete()
@@ -320,7 +314,7 @@ async def reminder_task():
                             )
                         except:
                             pass
-            await asyncio.sleep(3600)  # har 1 soatda eslatadi
+            await asyncio.sleep(3600)
         except Exception as e:
             logging.error(f"Reminder xatolik: {e}")
             await asyncio.sleep(60)
