@@ -458,20 +458,4 @@ async def reminder_task():
 async def main():
     init_db()
     load_registered_users()
-    asyncio.create_task(reminder_task())
-    print("🤖 Bot ishga tushdi...")
-    await dp.start_polling(bot)     
-# =========================
-# 🏁 Main
-# =========================
-async def main():
-    init_db()
-    load_registered_users()
-    # Agar reminder_task kerak bo'lsa, quyidagi qatorni yoqing va funksiya aniqlang
-    # asyncio.create_task(reminder_task())
-    print("🤖 Bot ishga tushdi...")
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.create_task(rem
